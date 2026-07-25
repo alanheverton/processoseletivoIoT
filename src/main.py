@@ -39,6 +39,7 @@ class ProductionCounter:
         self._button_raw_pressed = button_pressed
         self._button_stable_pressed = button_pressed
         self._button_changed_ms = now
+        self._reset_confirmation_pending = False
 
         print(READY_MESSAGE)
 
@@ -96,8 +97,12 @@ class ProductionCounter:
             and ticks_diff(now, self._button_changed_ms) >= BUTTON_DEBOUNCE_MS
         ):
             self._button_stable_pressed = pressed
-            if not pressed:
+            if pressed:
                 self._reset_shift(now)
+                self._reset_confirmation_pending = True
+            elif self._reset_confirmation_pending:
+                self._reset_confirmation_pending = False
+                print(RESET_MESSAGE)
 
     def _reset_shift(self, now):
         self._piece_count = 0
@@ -105,7 +110,6 @@ class ProductionCounter:
         self._piece_in_progress = False
         self._micro_stop_reported = False
         self._blocked_since_ms = now if self._light_stable_blocked else None
-        print(RESET_MESSAGE)
 
     def _poll_once(self):
         now = ticks_ms()
