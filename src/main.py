@@ -96,7 +96,7 @@ class ProductionCounter:
             and ticks_diff(now, self._button_changed_ms) >= BUTTON_DEBOUNCE_MS
         ):
             self._button_stable_pressed = pressed
-            if pressed:
+            if not pressed:
                 self._reset_shift(now)
 
     def _reset_shift(self, now):
