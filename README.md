@@ -70,7 +70,7 @@ O LDR começa configurado com `800 lux`, representando a linha livre. Sua saída
 
 ## 6. Resultados Obtidos
 
-A execução automatizada publicada de referência validou o checkpoint [`dbe5da82e78d610aba30e38ed9585c10f394b683`](https://github.com/alanheverton/processoseletivoIoT/commit/dbe5da82e78d610aba30e38ed9585c10f394b683). Esse [registro no GitHub Actions](https://github.com/alanheverton/processoseletivoIoT/actions/runs/30175040252) terminou com sucesso em **1 min 26 s**; a verificação do commit final ocorre automaticamente a cada novo *push*.
+A execução automatizada publicada validou o firmware do commit [`81b0af5181813e40b598daa6c9ef8f239c77d518`](https://github.com/alanheverton/processoseletivoIoT/commit/81b0af5181813e40b598daa6c9ef8f239c77d518). Esse [registro no GitHub Actions](https://github.com/alanheverton/processoseletivoIoT/actions/runs/30177147974) terminou com sucesso em aproximadamente **1 min 33 s**, com os **5 jobs aprovados** e os **3/3 testes Wokwi aprovados**. Por validar o firmware publicado, essa evidência permanece aplicável mesmo após alterações exclusivamente documentais.
 
 | Verificação | Resultado |
 |---|---|
