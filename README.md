@@ -1,368 +1,128 @@
-# Processo Seletivo – Intensivo Maker | IoT
+# Contador de Produção Não-Intrusivo
 
-## Etapa Prática – Sistemas Embarcados
+## 1. Identificação do Candidato
 
-Bem-vindo(a) à **etapa prática do processo seletivo para o Intensivo Maker | IoT**.
+- **Nome completo:** Alan Heverton Lima Martins
+- **GitHub:** [@alanheverton](https://github.com/alanheverton)
+- **Repositório:** [alanheverton/processoseletivoIoT](https://github.com/alanheverton/processoseletivoIoT)
+- **Branch da entrega:** [`projeto-light-contador-producao`](https://github.com/alanheverton/processoseletivoIoT/tree/projeto-light-contador-producao)
 
-Esta atividade tem como objetivo avaliar suas competências em **Sistemas Embarcados**, com foco em **organização de projeto, lógica de firmware e simulação de hardware**, a partir da aplicação prática dos conhecimentos adquiridos nos cursos EAD da etapa anterior.
+## 2. Visão Geral da Solução
 
-> **Objetivo principal**  
-> Avaliar sua capacidade de **planejar, estruturar e desenvolver** uma solução funcional de sistemas embarcados, seguindo boas práticas de engenharia.
+Este projeto implementa um contador de produção não intrusivo para modernização de linhas industriais manuais ou semiautomáticas que não possuem CLP. A proposta é realizar um *retrofit* de baixo custo: um sensor óptico observa a passagem das peças sem contato mecânico, enquanto o ESP32 contabiliza a produção, calcula o tempo de ciclo e identifica bloqueios prolongados.
 
----
+Na simulação, o sinal digital do LDR fica em nível alto quando a luz é obstruída. O firmware reconhece uma peça somente após a sequência completa de bloqueio e liberação do sensor, evitando contar repetidamente um objeto que permaneça parado. Se o bloqueio durar pelo menos 5 segundos, uma microparada é informada uma única vez pela UART. O operador pode zerar o turno por meio do botão `RESET`.
 
-## Antes de Tudo
+## 3. Arquitetura do Sistema Embarcado
 
-Se você **nunca utilizou Git ou GitHub**, não se preocupe.  
-Siga atentamente os passos abaixo.
+O firmware foi organizado na classe `ProductionCounter`, que concentra os estados e separa as responsabilidades em métodos curtos:
 
----
+- `_update_light()` filtra o sinal óptico e reconhece suas transições estáveis;
+- `_start_blockage()` inicia o acompanhamento da peça e o temporizador de bloqueio;
+- `_finish_blockage()` conclui a passagem, incrementa a contagem e calcula o ciclo;
+- `_check_micro_stop()` emite um único alerta para cada bloqueio prolongado;
+- `_update_button()` filtra o botão, aplica o reset no acionamento e confirma o gesto na liberação;
+- `_reset_shift()` reinicia contagem e referências temporais;
+- `_poll_once()` coordena uma iteração do sistema;
+- `run()` mantém o laço cooperativo com intervalo curto entre as leituras.
 
-### 1 - Criação de Conta no GitHub
-
-1. Acesse: <https://github.com>
-2. Clique em **Sign up**
-3. Crie sua conta gratuita seguindo as instruções da plataforma
-
-> O GitHub será utilizado para:
->
-> - Envio do seu projeto
-> - Versionamento do código
-> - Correção e validação automática via GitHub Actions
-
----
-
-### 2 - Instalação do Git
-
-O **Git** é a ferramenta responsável pelo controle de versões do seu código.
-
-### Windows
-
-Baixe e instale o **Git Bash**:  
-<https://git-scm.com/downloads>
-
-### Linux / macOS
-
-Verifique se o Git já está instalado:
-
-```bash
-git --version
+```mermaid
+flowchart LR
+    A["LDR: linha livre"] --> B["Bloqueio estável por 30 ms"]
+    B --> C{"Duração do bloqueio"}
+    C -->|"liberação antes de 5 s"| D["Liberação estável e contagem"]
+    C -->|"permanece por 5 s"| E["Alerta único de microparada"]
+    E --> D
+    F["Pressão estável do botão"] --> G["Reset imediato do turno"]
+    G --> H["Liberação estável e confirmação serial"]
 ```
 
-> Caso não esteja, instale pelo gerenciador de pacotes do seu sistema.
+O pino digital `GPIO34` recebe o sinal `DO` do módulo LDR: `HIGH` representa escuro ou feixe bloqueado, e `LOW` representa luz livre. Cada mudança precisa permanecer estável por `LIGHT_DEBOUNCE_MS = 30` antes de alterar o estado lógico. Na transição para bloqueado, o sistema registra o início da passagem; na liberação estável, conta exatamente uma peça.
 
-## Preparando o Ambiente
+O tempo de ciclo é o intervalo, calculado em milissegundos, entre a conclusão atual e a referência anterior. Essa referência é a inicialização para a primeira peça, o último reset para a primeira peça do novo turno ou a conclusão da peça anterior para as demais.
 
-Para desenvolver o desafio, você deverá criar uma cópia deste repositório no seu GitHub.
+O botão em `GPIO27` utiliza `Pin.PULL_UP`, portanto seu nível ativo é `LOW`. Tanto a pressão quanto a liberação precisam permanecer estáveis por `BUTTON_DEBOUNCE_MS = 40`. Assim que a pressão estável é reconhecida, a contagem e os cronômetros são zerados imediatamente. A mensagem de confirmação é emitida somente após a liberação estável, atendendo ao roteiro da automação sem adiar a alteração de estado. Um sinalizador pendente associa a confirmação ao acionamento anterior, evitando mensagens espúrias caso o sistema inicialize com o botão pressionado e impedindo repetições enquanto ele permanece mantido.
 
-### 1 - Fork do Repositório
+O reset zera a contagem e redefine a referência do próximo ciclo. Caso o sensor continue bloqueado nesse momento, a janela de 5 segundos da microparada também recomeça, permitindo um novo alerta sem reutilizar o tempo acumulado no turno anterior.
 
-No canto superior direito desta página, clique em Fork
+O laço principal é cooperativo e executa uma leitura a cada `POLL_INTERVAL_MS = 10`. Não há esperas longas, interrupções ou tarefas concorrentes. Todas as durações são calculadas por `ticks_diff()`, o que mantém as comparações corretas mesmo quando o contador interno de `ticks_ms()` retorna ao início de sua faixa.
 
-<img width="219" height="45" alt="image" src="https://github.com/user-attachments/assets/5d629626-513a-445c-ba0f-e5bb3e225187" />
+## 4. Componentes Utilizados na Simulação
 
-Uma cópia do repositório será criada no seu perfil do GitHub
+| Componente | Identificador | Conexões principais | Função |
+|---|---|---|---|
+| ESP32 DevKit C v4 | `esp` | Alimentação e UART | Executa o firmware MicroPython e mantém os estados do sistema |
+| Módulo fotorresistor (LDR) | `ldr1` | `VCC` em `3V3`, `GND` em terra e `DO` no `GPIO34` | Detecta linha livre ou bloqueada por comparação digital; limiar simulado de `1,65 V` |
+| Botão de pressão | `btn1` | `GPIO27` e terra | Solicita o reset do turno; entrada ativa em nível baixo com *pull-up* interno |
+| Monitor serial | UART | `TX`/`RX` do ESP32 | Exibe inicialização, contagem, tempo de ciclo, microparada e confirmação de reset |
 
-> O Fork permite que você trabalhe de forma independente, sem alterar o repositório original do processo seletivo.
+O LDR começa configurado com `800 lux`, representando a linha livre. Sua saída analógica `AO` não é utilizada, pois a decisão binária é realizada pelo comparador do próprio módulo e entregue pelo pino `DO`.
 
-### 2 - Clone do Repositório
+## 5. Decisões Técnicas Relevantes
 
-No repositório do seu Fork, clique em **<> Code**
+- **Máquina de estados por transições:** a peça é contada na passagem de bloqueado para livre, e não pelo nível instantâneo. Isso assegura uma contagem por objeto completamente liberado.
+- **Temporização não bloqueante:** o limite de microparada (`MICRO_STOP_LIMIT_MS = 5000`) é acompanhado no mesmo laço das entradas. Assim, o sistema continua respondendo ao sensor e ao botão durante a espera.
+- **Debounce independente:** sensor e botão possuem filtros e constantes próprios (`30 ms` e `40 ms`), adequando a validação à natureza de cada entrada sem espalhar números mágicos pelo código.
+- **Alerta rearmável e único:** uma variável registra se a microparada já foi informada. O alerta não inunda a UART durante o mesmo bloqueio e volta a ficar disponível após a liberação ou o reset.
+- **Reset imediato com confirmação posterior:** a pressão estável zera o turno no instante do acionamento, conforme o requisito funcional. A liberação estável apenas confirma pela UART o reset já realizado, garantindo uma mensagem por gesto sem repetir a mutação enquanto o botão permanece pressionado.
+- **Encapsulamento:** estados mutáveis pertencem a uma instância de `ProductionCounter`; pinos, limiares, intervalos e mensagens são constantes nomeadas. Essa separação deixa explícitas as regras do processo e facilita ajustes.
+- **Aritmética temporal segura:** `ticks_diff()` é usado em todas as durações, evitando subtrações diretas que falhariam no retorno periódico do contador do MicroPython.
 
-<img width="149" height="52" alt="image" src="https://github.com/user-attachments/assets/abbd331b-a005-4633-89c6-afd16acbe828" />
+## 6. Resultados Obtidos
 
-Copie a URL e execute no terminal:
+A execução automatizada publicada de referência validou o checkpoint [`dbe5da82e78d610aba30e38ed9585c10f394b683`](https://github.com/alanheverton/processoseletivoIoT/commit/dbe5da82e78d610aba30e38ed9585c10f394b683). Esse [registro no GitHub Actions](https://github.com/alanheverton/processoseletivoIoT/actions/runs/30175040252) terminou com sucesso em **1 min 26 s**; a verificação do commit final ocorre automaticamente a cada novo *push*.
 
-```bash
-git clone https://github.com/SEU_USUARIO/nome-do-repositorio.git
-cd nome-do-repositorio
-```
+| Verificação | Resultado |
+|---|---|
+| Detecção do cenário ativo | `light` |
+| Build do sistema de arquivos | **PASS** |
+| Cenário 1 — passagem e contagem de peça | **PASS** |
+| Cenário 2 — bloqueio e alerta de microparada | **PASS** |
+| Cenário 3 — acionamento e reset do turno | **PASS** |
+| Testes Wokwi | **3/3 aprovados** |
+| Artefato `fs.bin` | **2.097.152 bytes** |
 
-> O comando git clone cria uma cópia local do repositório para desenvolvimento.
+Ambiente comprovado na construção e na simulação:
 
-### 3 - Preparação do Ambiente de Execução
+- ESP-IDF `5.2.2`;
+- MicroPython `1.24.1-1.g50c8864e7f`;
+- Wokwi CLI `0.26.1`.
 
-Você pode executar o projeto de duas formas. Escolha apenas uma.
-
-#### Opção A – Ambiente Python Local
-
-**Requisitos:**
-
-- Python 3.10 ou 3.11
-- pip
-
-**Instale as dependências:**
-
-```bash
-pip install -r requirements.txt
-```
-
-#### Opção B – Dev Container (Recomendado)
-
-Este repositório inclui um Dev Container, garantindo um ambiente padronizado.
-
-**Requisitos:**
-
-- VS Code
-- Docker instalado
-- Extensão Dev Containers
-
-**Passos:**
-
-1. Abra o repositório no VS Code
-2. Clique em “Reopen in Container”
-3. Aguarde a criação automática do ambiente
-
-> Todas as dependências serão instaladas automaticamente.
-
-## Criando sua API Key do Wokwi
-
-A simulação do projeto será executada automaticamente via GitHub Actions, utilizando o Wokwi CLI.
-
-Para isso, você precisa gerar uma API Key.
-
-1. Acesse: <https://wokwi.com/dashboard/ci>
-2. Faça login (Google ou GitHub)
-3. Clique em Generate API Token
-4. Copie a chave gerada (exemplo: wokwi-xxxxxxxx)
-
-> Importante
-
-- Nunca faça commit dessa chave
-- Ela deve ser armazenada apenas como secret no GitHub
-
-## Configurando a API Key no GitHub (Secrets)
-
-**No repositório do seu Fork:**
-
-1. Vá em Settings
-2. Acesse Secrets and variables → Actions
-3. Clique em New repository secret
-4. Nome: WOKWI_API_KEY
-5. Valor: sua chave gerada
-6. Salve
-
-> As GitHub Actions do template já estão preparadas para usar essa variável automaticamente.
-
-## Desafio Técnico
-
-Você deverá desenvolver um projeto de sistemas embarcados simulados, utilizando Python e Wokwi.
-
-### Estrutura mínima esperada
+As mensagens funcionais emitidas pela UART são:
 
 ```text
-/project
- ├── src/
- │   └── main.py        # Código principal do projeto
- ├── wokwi.toml         # Configuração da simulação
- ├── diagram.json       # Circuito no Wokwi
- └── README.md          # Explicação do seu projeto
+Contador de Producao Inicializado
+Peca detectada! Total: X
+Tempo de ciclo: N ms
+Alerta: Micro-parada detectada!
+Turno resetado com sucesso. Contadores zerados.
 ```
 
-> Você pode expandir essa estrutura se desejar, desde que mantenha os arquivos essenciais.
+Exemplo consolidado da telemetria observada na simulação:
 
-### Escolha do cenário
-
-No diretório "scenarios" existem arquivos .md e pastas referentes a diferentes desafios. Selecione apenas um deles e mantenha apenas a pasta e .md referente ao desafio a ser desenvolvido, deletando os demais. Isso fará com o que o fluxo de testes automáticos selecione o fluxo de acordo com o desafio escolhido.
-
-### Como Desenvolver seu Projeto
-
-O desenvolvimento acontece principalmente nos arquivos abaixo:
-
-#### src/main.py
-
-- Código Python executado na simulação
-- Implementa a lógica do sistema embarcado
-- Exemplos: controle de LEDs, leitura de sensores, estados, temporizações, etc.
-
-#### diagram.json
-
-- Define o hardware virtual do projeto
-- Componentes como:
-  - LEDs
-  - Botões
-  - Sensores
-  - Placa microcontroladora
-
-#### wokwi.toml
-
-- Configura a simulação:
-  - Tipo de placa
-  - Framework
-  - Dependências adicionais
- 
-#### Rodando localmente
-
-Para executar o seu projeto locamente, é necesário preparar a imagem docker local, e após isso
-utiliza-la para gerar o arquivo que conterá o seu código para o projeto, para isso, execute os 
-seguintes códigos:
-
-1. Prepara a imagem docker (Necessário rodar apenas 1 vez)
-
-```bash
-docker build -t esp32-builder -f Dockerfile .
+```text
+Contador de Producao Inicializado
+Peca detectada! Total: 1
+Tempo de ciclo: 1343 ms
+Alerta: Micro-parada detectada!
+Turno resetado com sucesso. Contadores zerados.
 ```
 
-2. Prepara o arquivo de memória fs.bin (Necessário a cada iteração)
+O valor de `1343 ms` é uma observação do roteiro simulado, não um *benchmark* de desempenho nem uma estimativa de produtividade da linha real.
 
-```bash
-docker run --rm -v "$(pwd)/src:/mnt/src" -v "$(pwd):/mnt/out" esp32-builder bash -c "mkdir -p /tmp/fs && cp -r /mnt/src/* /tmp/fs/ && /mklittlefs/mklittlefs -c /tmp/fs -b 4096 -p 256 -s 0x200000 /mnt/out/fs.bin"
-```
+O firmware e a geração do sistema de arquivos concluíram sem erros ou *warnings* de compilação. Os registros da execução apresentam avisos externos provenientes das Actions fornecidas e do runtime Node.js, incluindo mensagens de depreciação e migração automática; eles não são produzidos pelo firmware nem pelo processo de build.
 
-#### Commit e Push
+## 7. Comentários Adicionais
 
-Após suas alterações:
+A principal dificuldade foi coordenar estímulos com durações diferentes sem bloquear o laço: uma passagem pode durar centenas de milissegundos, uma microparada exige acompanhamento por segundos e o botão precisa ser filtrado sem atrasar o sensor. A solução adotou referências temporais independentes e telemetria serial emitida somente nas transições relevantes. Outra decisão importante foi separar o efeito da confirmação: o reset ocorre na pressão filtrada, enquanto a mensagem é adiada até a liberação filtrada, preservando uma única ação por gesto e o contrato esperado pelo consumidor da UART.
 
-```bash
-git add .
-git commit -m "Descrição clara do que foi feito"
-git push
-```
+Limitações atuais:
 
-### Execução Automática (GitHub Actions)
+- a validação foi realizada em simulação, sem ensaio com sensor e esteira físicos;
+- luminosidade ambiente, posicionamento, calibração do limiar e eventual histerese precisam ser avaliados na instalação real;
+- um único sensor não identifica direção e pode tratar peças sobrepostas ou sem intervalo como uma única passagem;
+- contagem e temporizadores permanecem apenas na RAM e são perdidos após reinicialização ou falta de energia;
+- a UART oferece observabilidade local, mas não envia dados pela rede;
+- o tempo de ciclo representa o intervalo entre conclusões de peças, e não o tempo durante o qual cada peça permaneceu diante do sensor.
 
-A cada push, o GitHub Actions irá automaticamente:
-
-- Executar o pipeline de build
-- Rodar a simulação via Wokwi CLI
-- Validar que o projeto executa sem erros
-
-### Caso algo falhe
-
-- Vá até a aba Actions
-- Analise os logs da execução
-- Corrija e envie novamente
-
-## Critérios de Avaliação
-
-Esta etapa será avaliada considerando:
-
-- Funcionamento correto da simulação
-- Código organizado e legível
-- Estrutura de arquivos correta
-- Uso adequado do Wokwi
-- Commits claros e bem descritos
-- Projeto executando sem falhas nas Actions
-
----
-
-## Submissão Final
-
-Após concluir o desenvolvimento:
-
-1. Verifique se o projeto **executa sem erros** nas GitHub Actions
-2. Confirme que todos os arquivos obrigatórios estão presentes
-3. Copie o link do **seu repositório no GitHub**
-
-Envie o link conforme as orientações do processo seletivo na plataforma do **PNAAT**.
-
----
-
-## Relatório do Candidato
-
-O arquivo **`README.md` do seu repositório** deve ser utilizado como o  
-**relatório final do desafio técnico**.
-
-Preencha todas as seções abaixo de forma **clara, objetiva e técnica**.
-
-> **Dica importante**  
-> Não é necessário um relatório extenso.  
-> O principal critério é demonstrar **clareza nas decisões técnicas**, organização e entendimento do sistema embarcado desenvolvido.
-> Não mantenha os demais conteúdos escritos nesse arquivo README, aqui devem ser concentradas apenas informações referentes ao projeto desenvolvido.
-
----
-
-### Identificação do Candidato
-
-- **Nome completo:**
-- **GitHub:**
-
----
-
-## Visão Geral da Solução
-
-Descreva, em poucas palavras:
-
-- Qual é o objetivo do seu projeto
-- O que o sistema embarcado simulado faz
-- Como o usuário interage com ele (se aplicável)
-
----
-
-## Arquitetura do Sistema Embarcado
-
-Explique a arquitetura lógica do seu projeto, abordando:
-
-- Fluxo principal do programa (`main.py`)
-- Estrutura de estados, loops ou temporizações
-- Como os componentes interagem entre si
-
-Se desejar, utilize tópicos ou um pequeno diagrama em texto.
-
----
-
-## Componentes Utilizados na Simulação
-
-Liste os principais componentes definidos no `diagram.json`, por exemplo:
-
-- Tipo de placa utilizada
-- LEDs, botões, sensores, atuadores, etc.
-- Função de cada componente no sistema
-
----
-
-## Decisões Técnicas Relevantes
-
-Explique brevemente decisões importantes tomadas durante o desenvolvimento, como:
-
-- Organização do código
-- Uso de funções, estados ou constantes
-- Estratégias para temporização ou controle lógico
-
----
-
-## Resultados Obtidos
-
-Descreva o comportamento final do sistema:
-
-- O que funciona corretamente
-- Quais requisitos foram atendidos
-- Resultado observado na simulação do Wokwi
-
----
-
-## Comentários Adicionais (Opcional)
-
-Utilize este espaço para comentar, se desejar:
-
-- Dificuldades encontradas
-- Limitações da solução
-- Melhorias que você faria com mais tempo
-- Principais aprendizados durante o desafio
-
----
-
-> Este relatório faz parte da avaliação técnica.  
-> Clareza, objetividade e organização são tão importantes quanto o funcionamento do código.
-
----
-
-## Especificação dos Testes Automatizados (Wokwi CI)
-
-Para que o projeto seja validado com sucesso na esteira de integração contínua (CI), o firmware escrito em MicroPython deve interagir corretamente com as leituras dos sensores descritos em cada cenário e enviar as mensagens de status exatas.
-
-### Requisitos Críticos de Implementação
-
-1. **Casamento Exato de Strings:** O Wokwi CI faz uma verificação estrita caractere por caractere. Se houver divergência em maiúsculas/minúsculas, acentuação ou falta de pontuação, o teste irá falhar.
-2. **Arquitetura Não-Bloqueante:** Evite o uso de funções bloqueantes. Elas podem fazer com que o firmware perca a janela de tempo em que o simulador altera o peso, quebrando a sincronia do teste automatizado.
-
----
-
-## Suporte
-
-Em caso de dúvidas:
-
-- Consulte o material dos cursos EAD
-- Leia atentamente este README
-- Analise os logs das GitHub Actions
-- Utilize os canais oficiais para contato com os instrutores
+Como evolução, a contagem poderia ser persistida em NVS e a telemetria poderia ser publicada por MQTT. Os dados atuais de contagem, ciclo e microparadas fornecem insumos para disponibilidade e desempenho, mas o cálculo completo de OEE exige também tempo planejado e operacional, duração das paradas, ciclo ideal e classificação de peças boas e rejeitadas. Um segundo sensor óptico também poderia determinar direção, separar eventos ambíguos e melhorar a robustez da detecção.
